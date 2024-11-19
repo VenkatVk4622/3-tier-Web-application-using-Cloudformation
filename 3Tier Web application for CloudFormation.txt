@@ -1,128 +1,256 @@
-AWSTemplateFormatVersion: 2010-09-09
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 3-Tier Web Application with Web, App, and DB tiers
+
 Parameters:
+  AMI:
+    Type: String
+    Default: "ami-012967cc5a8c9f891"
+    Description: AMI ID for EC2 instances
+
   InstanceType:
     Type: String
-    Default: t2.micro
-    Description: EC2 instance type
-    AllowedValues:
-      - t2.micro
-      - t2.small
-      - t2.medium
-      - m3.medium
-    ConstraintDescription: Must be a valid EC2 instance type.
+    Default: "t2.micro"
+    Description: Instance type for EC2 instances
+
+  KeyPair:
+    Type: String
+    Default: "Venkat"
+    Description: Key pair for EC2 instances
+
+  DBUsername:
+    Type: String
+    Default: "admin"
+    Description: Username for the RDS database
+
+  DBPassword:
+    Type: String
+    Default: "admin123"
+    Description: Password for the RDS database
+    NoEcho: true
+
 Resources:
+  # VPC
   VPC:
-    Type: 'AWS::EC2::VPC'
+    Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16
+      CidrBlock: "10.0.0.0/16"
       EnableDnsSupport: true
       EnableDnsHostnames: true
-  PublicSubnet:
-    Type: 'AWS::EC2::Subnet'
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: 10.0.1.0/24
-      AvailabilityZone: us-east-1a
-      MapPublicIpOnLaunch: true
-  PrivateSubnet:
-    Type: 'AWS::EC2::Subnet'
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: 10.0.2.0/24
-      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: "WebAppVPC"
+
+  # Internet Gateway
   InternetGateway:
-    Type: 'AWS::EC2::InternetGateway'
+    Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: InternetGateway
-  AttachGateway:
-    Type: 'AWS::EC2::VPCGatewayAttachment'
+          Value: "WebAppIGW"
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
-  WebSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
+
+  # Public Subnet 1 for Web and App Instances
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
     Properties:
-      GroupDescription: Security group for web layer
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: 0.0.0.0/0
-  AppSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
+      CidrBlock: "10.0.1.0/24"
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: "PublicSubnet1"
+
+  # Public Subnet 2 for Load Balancer
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
     Properties:
-      GroupDescription: Security group for app layer
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: '8080'
-          ToPort: '8080'
-          CidrIp: 10.0.0.0/16
-  WebInstance:
-    Type: 'AWS::EC2::Instance'
+      CidrBlock: "10.0.4.0/24"
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: "PublicSubnet2"
+
+  # Private Subnet 1 for RDS
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
     Properties:
-      InstanceType: !Ref InstanceType
-      ImageId: ami-063d43db0594b521b
-      SecurityGroupIds:
-        - !Ref WebSecurityGroup
+      VpcId: !Ref VPC
+      CidrBlock: "10.0.2.0/24"
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: "PrivateSubnet1"
+
+  # Private Subnet 2 for RDS
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.0.3.0/24"
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: "PrivateSubnet2"
+
+  # Route Table and Route
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: "PublicRouteTable"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  RouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
       SubnetId: !Ref PublicSubnet
-      KeyName: Venkat
-  AppInstance:
-    Type: 'AWS::EC2::Instance'
+      RouteTableId: !Ref PublicRouteTable
+
+  RouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group for Web/App Instances
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP/HTTPS and SSH access"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+
+  # Security Group for RDS
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow MySQL access from App instance"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+
+  # Web EC2 Instance
+  WebInstance:
+    Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: ami-063d43db0594b521b
+      ImageId: !Ref AMI
+      KeyName: !Ref KeyPair
       SecurityGroupIds:
-        - !Ref AppSecurityGroup
-      SubnetId: !Ref PrivateSubnet
-      KeyName: your-key-name
+        - !Ref InstanceSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: "WebInstance"
+
+  # App EC2 Instance
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AMI
+      KeyName: !Ref KeyPair
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: "AppInstance"
+
+  # RDS Instance
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t4g.micro
+      Engine: mysql
+      EngineVersion: "8.0"
+      DBInstanceIdentifier: "WebAppDB"
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 20
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      MultiAZ: false
+      PubliclyAccessible: false
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "DB Subnet Group"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: "WebAppDBSubnetGroup"
+
+  # Load Balancer
   LoadBalancer:
-    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: my-load-balancer
+      Name: "WebAppLoadBalancer"
       Subnets:
-        - Ref: PublicSubnet
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
       SecurityGroups:
-        - Ref: WebSecurityGroup
-      LoadBalancerType: application
+        - !Ref InstanceSecurityGroup
       Scheme: internet-facing
-  WebTargetGroup:
-    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: "WebAppTargetGroup"
       Port: 80
       Protocol: HTTP
       VpcId: !Ref VPC
       TargetType: instance
-  WebListener:
-    Type: 'AWS::ElasticLoadBalancingV2::Listener'
-    Properties:
-      DefaultActions:
-        - Type: fixed-response
-          FixedResponseConfig:
-            StatusCode: 200
-            ContentType: text/plain
-            MessageBody: OK
-      LoadBalancerArn: !Ref LoadBalancer
-      Port: '80'
-      Protocol: HTTP
-  MySQLDatabase:
-    Type: 'AWS::RDS::DBInstance'
-    Properties:
-      DBInstanceClass: db.t2.micro
-      Engine: MySQL
-      MasterUsername: admin
-      MasterUserPassword: admin123
-      DBInstanceIdentifier: my-database
-      AllocatedStorage: '20'
-      VPCSecurityGroups:
-        - !Ref AppSecurityGroup
-      DBSubnetGroupName: !Ref DBSubnetGroup
-  DBSubnetGroup:
-    Type: 'AWS::RDS::DBSubnetGroup'
-    Properties:
-      DBSubnetGroupDescription: My DB subnet group
-      SubnetIds:
-        - !Ref PrivateSubnet
+
+Outputs:
+  LoadBalancerDNS:
+    Description: "DNS name of the Load Balancer"
+    Value: !GetAtt LoadBalancer.DNSName
